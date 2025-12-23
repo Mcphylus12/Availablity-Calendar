@@ -83,38 +83,25 @@
 </div>
 
 <div id="calendar-container"></div>
-
+<div id="merge-container" style="margin-top:40px; max-width:600px; display:none;">
+  <h3>Add someone else's availability</h3>
+  <input
+    id="mergeInput"
+    type="text"
+    placeholder="Paste shared link or fragment here"
+    style="width:100%; padding:8px;"
+  />
+  <button id="mergeBtn" style="margin-top:10px;">
+    Merge blocked dates
+  </button>
+  <div id="mergeError" style="color:red; margin-top:8px;"></div>
+</div>
 <script>
+  let currentState = null;
 const calendarContainer = document.getElementById("calendar-container");
 const formContainer = document.getElementById("form-container");
 
 const weekdayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-
-function parseFragment() {
-  if (!location.hash) return null;
-  const params = new URLSearchParams(location.hash.substring(1));
-  if (!params.get("start")) return null;
-
-  return {
-    start: params.get("start"),
-    end: params.get("end"),
-    weekday: Number(params.get("weekday")),
-    leap: params.get("leap") === "1",
-    busy: new Set((params.get("busy") || "").split(",").filter(Boolean))
-  };
-}
-
-function updateFragment(state) {
-  const params = new URLSearchParams();
-  params.set("start", state.start);
-  params.set("end", state.end);
-  params.set("weekday", state.weekday);
-  params.set("leap", state.leap ? "1" : "0");
-  if (state.busy.size) {
-    params.set("busy", [...state.busy].sort().join(","));
-  }
-  location.hash = params.toString();
-}
 
 function daysInMonth(year, month, leap) {
   if (month === 1) return leap ? 29 : 28;
@@ -131,10 +118,83 @@ function* monthRange(start, end) {
   }
 }
 
+function buildIndexMap(state) {
+  const map = new Map();
+  let index = 0;
+
+  for (const [y, m] of monthRange(state.start, state.end)) {
+    const days = daysInMonth(y, m, state.leap);
+    for (let d = 1; d <= days; d++) {
+      const iso = `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+      map.set(iso, index++);
+    }
+  }
+  return map;
+}
+
+function parseAnyFragment(input) {
+  const hashIndex = input.indexOf("#");
+  if (hashIndex === -1) return null;
+  const fragment = input.slice(hashIndex + 1);
+  const p = new URLSearchParams(fragment);
+  if (!p.get("s")) return null;
+  return p;
+}
+  
+function encodeBusy(busySet, indexMap) {
+  return [...busySet]
+    .map(d => indexMap.get(d).toString(36))
+    .sort((a,b) => parseInt(a,36) - parseInt(b,36))
+    .join(".");
+}
+
+function decodeBusy(encoded, indexMap) {
+  const reverse = [...indexMap.entries()].reduce((a,[k,v]) => {
+    a[v] = k;
+    return a;
+  }, {});
+  return new Set(
+    encoded.split(".").filter(Boolean).map(x => reverse[parseInt(x,36)])
+  );
+}
+
+function updateFragment(state, indexMap) {
+  const p = new URLSearchParams();
+  p.set("s", state.start);
+  p.set("e", state.end);
+  p.set("w", state.weekday);
+  p.set("l", state.leap ? "1" : "0");
+  if (state.busy.size) {
+    p.set("b", encodeBusy(state.busy, indexMap));
+  }
+  location.hash = p.toString();
+}
+
+function parseFragment() {
+  if (!location.hash) return null;
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (!p.get("s")) return null;
+
+  const baseState = {
+    start: p.get("s"),
+    end: p.get("e"),
+    weekday: Number(p.get("w")),
+    leap: p.get("l") === "1",
+    busy: new Set()
+  };
+
+  const indexMap = buildIndexMap(baseState);
+  if (p.get("b")) {
+    baseState.busy = decodeBusy(p.get("b"), indexMap);
+  }
+  return { state: baseState, indexMap };
+}
+
 function renderCalendar(state) {
   calendarContainer.innerHTML = "";
   formContainer.style.display = "none";
 
+  const indexMap = buildIndexMap(state);
   let weekdayOffset = state.weekday;
 
   for (const [year, month] of monthRange(state.start, state.end)) {
@@ -156,9 +216,9 @@ function renderCalendar(state) {
     });
 
     for (let i = 0; i < weekdayOffset; i++) {
-      const empty = document.createElement("div");
-      empty.className = "date empty";
-      grid.appendChild(empty);
+      const e = document.createElement("div");
+      e.className = "date empty";
+      grid.appendChild(e);
     }
 
     const totalDays = daysInMonth(year, month, state.leap);
@@ -169,19 +229,15 @@ function renderCalendar(state) {
       cell.className = "date";
       cell.textContent = d;
 
-      if (state.busy.has(iso)) {
-        cell.classList.add("busy");
-      }
+      if (state.busy.has(iso)) cell.classList.add("busy");
 
       cell.onclick = () => {
-        if (state.busy.has(iso)) {
-          state.busy.delete(iso);
-          cell.classList.remove("busy");
-        } else {
-          state.busy.add(iso);
-          cell.classList.add("busy");
-        }
-        updateFragment(state);
+        state.busy.has(iso)
+          ? state.busy.delete(iso)
+          : state.busy.add(iso);
+
+        cell.classList.toggle("busy");
+        updateFragment(state, indexMap);
       };
 
       grid.appendChild(cell);
@@ -191,6 +247,8 @@ function renderCalendar(state) {
     monthDiv.appendChild(grid);
     calendarContainer.appendChild(monthDiv);
   }
+
+  document.getElementById("merge-container").style.display = "block";
 }
 
 document.getElementById("startBtn").onclick = () => {
@@ -201,15 +259,57 @@ document.getElementById("startBtn").onclick = () => {
     leap: leapYear.checked,
     busy: new Set()
   };
-  updateFragment(state);
+  const indexMap = buildIndexMap(state);
+  updateFragment(state, indexMap);
+  currentState = state;
   renderCalendar(state);
 };
 
-const initialState = parseFragment();
-if (initialState) {
-  renderCalendar(initialState);
+const parsed = parseFragment();
+if (parsed) {
+  currentState = parsed.state;
+  renderCalendar(parsed.state);
 }
+
+  document.getElementById("mergeBtn").onclick = () => {
+  const input = document.getElementById("mergeInput").value.trim();
+  const error = document.getElementById("mergeError");
+  error.textContent = "";
+
+  const p = parseAnyFragment(input);
+  if (!p) {
+    error.textContent = "Invalid link or fragment.";
+    return;
+  }
+
+  // Validate calendar compatibility
+  if (
+    p.get("s") !== currentState.start ||
+    p.get("e") !== currentState.end ||
+    p.get("w") !== String(currentState.weekday) ||
+    p.get("l") !== (currentState.leap ? "1" : "0")
+  ) {
+    error.textContent = "Calendar scope does not match.";
+    return;
+  }
+
+  if (!p.get("b")) {
+    error.textContent = "No blocked dates found in link.";
+    return;
+  }
+
+  const indexMap = buildIndexMap(currentState);
+  const incomingBusy = decodeBusy(p.get("b"), indexMap);
+
+  incomingBusy.forEach(d => currentState.busy.add(d));
+
+  updateFragment(currentState, indexMap);
+  renderCalendar(currentState);
+
+  document.getElementById("mergeInput").value = "";
+};
 </script>
+
 
 </body>
 </html>
