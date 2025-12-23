@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Availability Lobby</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    padding: 20px;
+  }
+  h2 {
+    margin-top: 40px;
+  }
+  .calendar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    max-width: 700px;
+  }
+  .day-header {
+    font-weight: bold;
+    text-align: center;
+  }
+  .date {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: center;
+    cursor: pointer;
+  }
+  .date.busy {
+    background: #ffb3b3;
+  }
+  .date.empty {
+    border: none;
+    cursor: default;
+  }
+  .month {
+    margin-bottom: 40px;
+  }
+  #form-container {
+    max-width: 400px;
+  }
+  label {
+    display: block;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+
+<div id="form-container">
+  <h1>Create Availability Lobby</h1>
+
+  <label>
+    Start Month:
+    <input type="month" id="startMonth" required>
+  </label>
+
+  <label>
+    End Month:
+    <input type="month" id="endMonth" required>
+  </label>
+
+  <label>
+    Weekday of the 1st of Start Month:
+    <select id="startWeekday">
+      <option value="0">Sunday</option>
+      <option value="1">Monday</option>
+      <option value="2">Tuesday</option>
+      <option value="3">Wednesday</option>
+      <option value="4">Thursday</option>
+      <option value="5">Friday</option>
+      <option value="6">Saturday</option>
+    </select>
+  </label>
+
+  <label>
+    <input type="checkbox" id="leapYear">
+    Treat February as Leap Year
+  </label>
+
+  <button id="startBtn">Create Calendar</button>
+</div>
+
+<div id="calendar-container"></div>
+
+<script>
+const calendarContainer = document.getElementById("calendar-container");
+const formContainer = document.getElementById("form-container");
+
+const weekdayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function parseFragment() {
+  if (!location.hash) return null;
+  const params = new URLSearchParams(location.hash.substring(1));
+  if (!params.get("start")) return null;
+
+  return {
+    start: params.get("start"),
+    end: params.get("end"),
+    weekday: Number(params.get("weekday")),
+    leap: params.get("leap") === "1",
+    busy: new Set((params.get("busy") || "").split(",").filter(Boolean))
+  };
+}
+
+function updateFragment(state) {
+  const params = new URLSearchParams();
+  params.set("start", state.start);
+  params.set("end", state.end);
+  params.set("weekday", state.weekday);
+  params.set("leap", state.leap ? "1" : "0");
+  if (state.busy.size) {
+    params.set("busy", [...state.busy].sort().join(","));
+  }
+  location.hash = params.toString();
+}
+
+function daysInMonth(year, month, leap) {
+  if (month === 1) return leap ? 29 : 28;
+  return [31,28,31,30,31,30,31,31,30,31,30,31][month];
+}
+
+function* monthRange(start, end) {
+  let [sy, sm] = start.split("-").map(Number);
+  let [ey, em] = end.split("-").map(Number);
+  while (sy < ey || (sy === ey && sm <= em)) {
+    yield [sy, sm - 1];
+    sm++;
+    if (sm === 13) { sm = 1; sy++; }
+  }
+}
+
+function renderCalendar(state) {
+  calendarContainer.innerHTML = "";
+  formContainer.style.display = "none";
+
+  let weekdayOffset = state.weekday;
+
+  for (const [year, month] of monthRange(state.start, state.end)) {
+    const monthDiv = document.createElement("div");
+    monthDiv.className = "month";
+
+    const title = document.createElement("h2");
+    title.textContent = `${year}-${String(month+1).padStart(2,"0")}`;
+    monthDiv.appendChild(title);
+
+    const grid = document.createElement("div");
+    grid.className = "calendar";
+
+    weekdayNames.forEach(d => {
+      const h = document.createElement("div");
+      h.className = "day-header";
+      h.textContent = d;
+      grid.appendChild(h);
+    });
+
+    for (let i = 0; i < weekdayOffset; i++) {
+      const empty = document.createElement("div");
+      empty.className = "date empty";
+      grid.appendChild(empty);
+    }
+
+    const totalDays = daysInMonth(year, month, state.leap);
+
+    for (let d = 1; d <= totalDays; d++) {
+      const iso = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+      const cell = document.createElement("div");
+      cell.className = "date";
+      cell.textContent = d;
+
+      if (state.busy.has(iso)) {
+        cell.classList.add("busy");
+      }
+
+      cell.onclick = () => {
+        if (state.busy.has(iso)) {
+          state.busy.delete(iso);
+          cell.classList.remove("busy");
+        } else {
+          state.busy.add(iso);
+          cell.classList.add("busy");
+        }
+        updateFragment(state);
+      };
+
+      grid.appendChild(cell);
+    }
+
+    weekdayOffset = (weekdayOffset + totalDays) % 7;
+    monthDiv.appendChild(grid);
+    calendarContainer.appendChild(monthDiv);
+  }
+}
+
+document.getElementById("startBtn").onclick = () => {
+  const state = {
+    start: startMonth.value,
+    end: endMonth.value,
+    weekday: Number(startWeekday.value),
+    leap: leapYear.checked,
+    busy: new Set()
+  };
+  updateFragment(state);
+  renderCalendar(state);
+};
+
+const initialState = parseFragment();
+if (initialState) {
+  renderCalendar(initialState);
+}
+</script>
+
+</body>
+</html>
